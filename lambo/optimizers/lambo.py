@@ -13,11 +13,11 @@ from pymoo.factory import get_performance_indicator
 from botorch.utils.multi_objective import infer_reference_point
 
 from lambo.models.mlm import sample_tokens, evaluate_windows
+from lambo.models.gp_utils import fit_encoder_only
 from lambo.optimizers.pymoo import pareto_frontier, Normalizer
 from lambo.models.shared_elements import check_early_stopping
 from lambo.utils import weighted_resampling, DataSplit, update_splits, str_to_tokens, tokens_to_str, safe_np_cat
 from lambo.models.lanmt import corrupt_tok_idxs
-
 
 class LaMBO(object):
     def __init__(self, bb_task, tokenizer, encoder, surrogate, acquisition, num_rounds, num_gens,
@@ -61,7 +61,8 @@ class LaMBO(object):
         self.val_split = DataSplit()
         self.test_split = DataSplit()
 
-    def optimize(self, candidate_pool, pool_targets, all_seqs, all_targets, log_prefix=''):
+
+    def optimize(self, candidate_pool, pool_targets, all_seqs, all_targets, extra_seqs, log_prefix=''):
         batch_size = self.bb_task.batch_size
         target_min = all_targets.min(axis=0).copy()
         target_range = all_targets.max(axis=0).copy() - target_min
@@ -76,6 +77,11 @@ class LaMBO(object):
         pool_candidates = candidate_pool[is_feasible]
         pool_targets = pool_targets[is_feasible]
         pool_seqs = np.array([p_cand.mutant_residue_seq for p_cand in pool_candidates])
+
+        if extra_seqs:
+            X_extra = np.array(extra_seqs, dtype='S')
+        else:
+            X_extra = None
 
         self.active_candidates, self.active_targets = pool_candidates, pool_targets
         self.active_seqs = pool_seqs
@@ -167,8 +173,8 @@ class LaMBO(object):
             X_test, Y_test = self.test_split.inputs, tgt_transform(self.test_split.targets)
 
             records = self.surrogate_model.fit(
-                X_train, Y_train, X_val, Y_val, X_test, Y_test,
-                encoder_obj=self.encoder_obj, resampling_temp=None
+                X_train, Y_train, X_val, Y_val, X_test, Y_test, X_extra=X_extra,
+                encoder_obj=self.encoder_obj, resampling_temp=None, extra_bs=128
             )
 
             # log result

@@ -8,6 +8,7 @@ defaults:
   - tokenizer: protein
   - surrogate: multi_task_exact_gp
 
+swissprot: null
 seed: ${trial_id}
 trial_id: 0
 project_name: lambo

@@ -4,6 +4,8 @@ import math
 import copy
 import logging
 
+import numpy as np
+
 from gpytorch import lazify
 from gpytorch.lazy import ConstantDiagLazyTensor
 from gpytorch.settings import cholesky_jitter
@@ -16,6 +18,7 @@ from botorch.models import SingleTaskGP, KroneckerMultiTaskGP
 
 from lambo.utils import draw_bootstrap, to_tensor, weighted_resampling, batched_call
 from lambo import transforms as gfp_transforms
+from lambo import dataset as dataset_util
 from lambo.models.shared_elements import check_early_stopping
 from lambo.models.mlm import mlm_train_step, mlm_eval_epoch
 from lambo.models.lanmt import lanmt_eval_epoch, lanmt_train_step
@@ -60,7 +63,7 @@ def gp_train_step(surrogate, optimizer, inputs, targets, mll):
     loss.backward()
     optimizer.step()
     return loss
-    
+
 
 def fit_encoder_only(surrogate, optimizer, mll, train_loader, num_epochs):
     assert hasattr(surrogate, 'encoder')
@@ -76,20 +79,23 @@ def fit_encoder_only(surrogate, optimizer, mll, train_loader, num_epochs):
 
 
 def fit_gp_surrogate(
-    surrogate, 
-    mll, 
-    X_train, 
+    surrogate,
+    mll,
+    X_train,
     Y_train,
     X_val,
     Y_val,
-    X_test, 
-    Y_test, 
-    eval_bs=None, 
-    train_bs=None, 
+    X_test,
+    Y_test,
+    X_extra=None,
+    eval_bs=None,
+    train_bs=None,
+    extra_bs=None,
     shuffle_train=False,
     log_prefix="",
     encoder_obj='mll',
     resampling_temp=None,
+    encoder_only=False
 ):
     assert encoder_obj in ['mll', 'mlm', 'lanmt', None], 'unsupported encoder objective'
     print(f'{X_train.shape[0]} train, {X_val.shape[0]} val, {X_test.shape[0]} test')
@@ -113,6 +119,12 @@ def fit_gp_surrogate(
     train_bs = X_train.shape[0] if train_bs is None else train_bs
     train_dataset, val_dataset = surrogate._get_datasets(X_train, X_val, Y_train, Y_val)
     _, test_dataset = surrogate._get_datasets(X_train, X_test, Y_train, Y_test)
+
+    if isinstance(X_extra, np.ndarray):
+        extra_dataset = dataset_util.TransformTensorDataset(
+            [X_train], surrogate.train_transform
+        )
+        extra_loader = DataLoader(extra_dataset, batch_size=extra_bs, shuffle=shuffle_train, collate_fn=collate_fn)
 
     train_loader = DataLoader(train_dataset, batch_size=train_bs, shuffle=shuffle_train, collate_fn=collate_fn)
 
@@ -199,7 +211,6 @@ def fit_gp_surrogate(
     print('\n---- fitting all params ----')
     for epoch_idx in range(surrogate.num_epochs):
         metrics = {}
-
         # train encoder through supervised MLL objective
         if has_encoder and encoder_obj == 'mll':
             enc_sup_loss = fit_encoder_only(
@@ -207,6 +218,21 @@ def fit_gp_surrogate(
             )
         else:
             enc_sup_loss = 0.
+
+        if isinstance(X_extra, np.ndarray):
+            print('\n---- pretraining an epoch with extra data ----')
+            for inputs in extra_loader:
+                if isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'mlm':
+                    surrogate.encoder.requires_grad_(True)
+                    mlm_loss, _, _ = mlm_train_step(
+                        surrogate.encoder, gp_optimizer, inputs, surrogate.encoder.mask_ratio, loss_scale=1.
+                    )
+                elif isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'lanmt':
+                    surrogate.encoder.requires_grad_(True)
+                    mlm_loss, _, _ = lanmt_train_step(
+                        surrogate.encoder.model, gp_optimizer, inputs, loss_scale=1.
+                    )
+            print('\n---- done pretraining ----')
 
         avg_train_loss = enc_sup_loss
         surrogate.train()

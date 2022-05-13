@@ -13,7 +13,11 @@ from omegaconf import OmegaConf
 from upcycle.scripting import startup
 from upcycle.logging.analysis import flatten_config
 
+import Bio.SwissProt as sp
+
 from gpytorch.settings import max_cholesky_size
+
+from tqdm import tqdm
 
 
 @hydra.main(config_path='../hydra_config', config_name='black_box_opt')
@@ -41,6 +45,21 @@ def main(config):
             project_root = Path(os.getcwd()).parents[2]  # changing the Hydra run dir will break this.
             base_candidates, base_targets, all_seqs, all_targets = bb_task.task_setup(config, project_root=project_root)
 
+            #fn = '/home/data/SwissProt/uniprot_sprot.dat'
+
+            # Hardcode everything for now, I'll clean it up later
+            if config.swissprot:
+                swissprot_seqs = []
+                with open(config.swissprot) as handle:
+                    records = sp.parse(handle)
+                    from tqdm import tqdm
+                    for record in tqdm(records):
+                        seq = record.sequence
+                        if len(seq) <= 512:
+                            swissprot_seqs += [seq]
+            else:
+                swissprot_seqs=None
+
             # optimizer
             max_chol_sz = config.surrogate.get('max_cholesky_size', int(1e5))
             with max_cholesky_size(max_chol_sz):
@@ -53,7 +72,7 @@ def main(config):
                     tokenizer=tokenizer
                 )
                 metrics = optimizer.optimize(
-                    base_candidates, base_targets, all_seqs, all_targets, log_prefix=config.task.log_prefix
+                    base_candidates, base_targets, all_seqs, all_targets, swissprot_seqs, log_prefix=config.task.log_prefix
                 )
             metrics = {key.split('/')[-1]: val for key, val in metrics.items()}  # strip prefix
             ret_val = metrics['hypervol_rel']
