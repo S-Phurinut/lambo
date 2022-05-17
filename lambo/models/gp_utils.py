@@ -111,7 +111,7 @@ def pretrain_dae(
         )
         extra_loader = DataLoader(extra_dataset, batch_size=extra_bs, shuffle=True, collate_fn=collate_fn, num_workers=8)
 
-    for epoch_idx in range(surrogate.num_epochs):
+    for epoch_idx in range(10):
         fit_dae_only(surrogate, extra_loader, gp_optimizer, encoder_obj)
 
 
