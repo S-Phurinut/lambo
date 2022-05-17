@@ -78,6 +78,43 @@ def fit_encoder_only(surrogate, optimizer, mll, train_loader, num_epochs):
     return avg_loss.item()
 
 
+def fit_dae_only(surrogate, extra_loader, gp_optimizer, encoder_obj):
+    print('\n---- fitting an epoch with extra data ----')
+    for inputs in extra_loader:
+        if isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'mlm':
+            surrogate.encoder.requires_grad_(True)
+            mlm_loss, _, _ = mlm_train_step(
+                surrogate.encoder, gp_optimizer, inputs, surrogate.encoder.mask_ratio, loss_scale=1.
+            )
+        elif isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'lanmt':
+            surrogate.encoder.requires_grad_(True)
+            mlm_loss, _, _ = lanmt_train_step(
+                surrogate.encoder.model, gp_optimizer, inputs, loss_scale=1.
+            )
+    print('\n---- done ----')
+
+
+def pretrain_dae(
+    surrogate,
+    X_extra,
+    encoder_obj='mlm',
+    extra_bs=None,
+):
+    gp_optimizer = torch.optim.Adam(surrogate.param_groups)
+    gp_lr_sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        gp_optimizer, patience=math.ceil(surrogate.patience / 2.), threshold=1e-3
+    )
+    collate_fn = lambda x: gfp_transforms.padding_collate_fn(x, surrogate.tokenizer.padding_idx)
+    if isinstance(X_extra, np.ndarray):
+        extra_dataset = dataset_util.TransformTensorDataset(
+            [X_extra], surrogate.train_transform
+        )
+        extra_loader = DataLoader(extra_dataset, batch_size=extra_bs, shuffle=True, collate_fn=collate_fn, num_workers=8)
+
+    for epoch_idx in range(surrogate.num_epochs):
+        fit_dae_only(surrogate, extra_loader, gp_optimizer, encoder_obj)
+
+
 def fit_gp_surrogate(
     surrogate,
     mll,
@@ -122,9 +159,9 @@ def fit_gp_surrogate(
 
     if isinstance(X_extra, np.ndarray):
         extra_dataset = dataset_util.TransformTensorDataset(
-            [X_train], surrogate.train_transform
+            [X_extra], surrogate.train_transform
         )
-        extra_loader = DataLoader(extra_dataset, batch_size=extra_bs, shuffle=shuffle_train, collate_fn=collate_fn)
+        extra_loader = DataLoader(extra_dataset, batch_size=extra_bs, shuffle=True, collate_fn=collate_fn, num_workers=8)
 
     train_loader = DataLoader(train_dataset, batch_size=train_bs, shuffle=shuffle_train, collate_fn=collate_fn)
 
@@ -209,6 +246,10 @@ def fit_gp_surrogate(
 
     records = [start_metrics]
     print('\n---- fitting all params ----')
+    if isinstance(X_extra, np.ndarray):
+        print('\n---- fitting surrogate model on extra data ----')
+        fit_dae_only(surrogate, extra_loader, gp_optimizer, encoder_obj)
+
     for epoch_idx in range(surrogate.num_epochs):
         metrics = {}
         # train encoder through supervised MLL objective
@@ -218,21 +259,6 @@ def fit_gp_surrogate(
             )
         else:
             enc_sup_loss = 0.
-
-        if isinstance(X_extra, np.ndarray):
-            print('\n---- pretraining an epoch with extra data ----')
-            for inputs in extra_loader:
-                if isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'mlm':
-                    surrogate.encoder.requires_grad_(True)
-                    mlm_loss, _, _ = mlm_train_step(
-                        surrogate.encoder, gp_optimizer, inputs, surrogate.encoder.mask_ratio, loss_scale=1.
-                    )
-                elif isinstance(surrogate.encoder, LanguageModel) and encoder_obj == 'lanmt':
-                    surrogate.encoder.requires_grad_(True)
-                    mlm_loss, _, _ = lanmt_train_step(
-                        surrogate.encoder.model, gp_optimizer, inputs, loss_scale=1.
-                    )
-            print('\n---- done pretraining ----')
 
         avg_train_loss = enc_sup_loss
         surrogate.train()

@@ -55,7 +55,7 @@ def main(config):
                     from tqdm import tqdm
                     for record in tqdm(records):
                         seq = record.sequence
-                        if len(seq) <= 512:
+                        if len(seq) < config.task.max_len:
                             swissprot_seqs += [seq]
             else:
                 swissprot_seqs=None

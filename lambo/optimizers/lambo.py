@@ -13,7 +13,7 @@ from pymoo.factory import get_performance_indicator
 from botorch.utils.multi_objective import infer_reference_point
 
 from lambo.models.mlm import sample_tokens, evaluate_windows
-from lambo.models.gp_utils import fit_encoder_only
+from lambo.models.gp_utils import fit_encoder_only, pretrain_dae
 from lambo.optimizers.pymoo import pareto_frontier, Normalizer
 from lambo.models.shared_elements import check_early_stopping
 from lambo.utils import weighted_resampling, DataSplit, update_splits, str_to_tokens, tokens_to_str, safe_np_cat
@@ -23,7 +23,7 @@ class LaMBO(object):
     def __init__(self, bb_task, tokenizer, encoder, surrogate, acquisition, num_rounds, num_gens,
                  lr, num_opt_steps, concentrate_pool, patience, mask_ratio, resampling_weight,
                  encoder_obj, optimize_latent, position_sampler, entropy_penalty,
-                 window_size, latent_init, **kwargs):
+                 window_size, latent_init, pretrain_extra_data, online_extra_data, **kwargs):
 
         self.tokenizer = tokenizer
         self.num_rounds = num_rounds
@@ -61,6 +61,9 @@ class LaMBO(object):
         self.val_split = DataSplit()
         self.test_split = DataSplit()
 
+        self.pretrain_extra_data = pretrain_extra_data
+        self.online_extra_data = online_extra_data
+
 
     def optimize(self, candidate_pool, pool_targets, all_seqs, all_targets, extra_seqs, log_prefix=''):
         batch_size = self.bb_task.batch_size
@@ -79,7 +82,7 @@ class LaMBO(object):
         pool_seqs = np.array([p_cand.mutant_residue_seq for p_cand in pool_candidates])
 
         if extra_seqs:
-            X_extra = np.array(extra_seqs, dtype='S')
+            X_extra = np.array(extra_seqs, dtype='O')
         else:
             X_extra = None
 
@@ -106,6 +109,15 @@ class LaMBO(object):
         print('\n best candidates')
         obj_vals = {f'obj_val_{i}': pareto_targets[:, i].min() for i in range(self.bb_task.obj_dim)}
         print(pd.DataFrame([obj_vals]).to_markdown(floatfmt='.4f'))
+
+        if self.pretrain_extra_data:
+            print('\n---- pretraining surrogate model on extra data ----')
+            pretrain_dae(
+                self.surrogate_model,
+                X_extra, encoder_obj=self.encoder_obj, extra_bs=1024)
+
+        if not self.online_extra_data:
+            X_extra = None
 
         for round_idx in range(1, self.num_rounds + 1):
             metrics = {}
@@ -174,7 +186,7 @@ class LaMBO(object):
 
             records = self.surrogate_model.fit(
                 X_train, Y_train, X_val, Y_val, X_test, Y_test, X_extra=X_extra,
-                encoder_obj=self.encoder_obj, resampling_temp=None, extra_bs=128
+                encoder_obj=self.encoder_obj, resampling_temp=None, extra_bs=1024
             )
 
             # log result
