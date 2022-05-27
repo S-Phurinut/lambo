@@ -499,6 +499,9 @@ class LaMBO(object):
             loc=target_min + 0.5 * target_range,
             scale=target_range / 2.,
         )
+
+        np.random.seed(None)
+
         new_seqs = all_seqs.copy()
         new_targets = all_targets.copy()
 
@@ -534,49 +537,41 @@ class LaMBO(object):
         for round_idx in range(1, self.num_rounds + 1):
             metrics = {}
 
-            # contract active pool to current Pareto frontier
-            if (self.concentrate_pool > 0 and round_idx % self.concentrate_pool == 0) or self.latent_init == 'perturb_pareto':
-                self.active_candidates, self.active_targets = pareto_frontier(
-                    self.active_candidates, self.active_targets
-                )
-                self.active_seqs = np.array([a_cand.mutant_residue_seq for a_cand in self.active_candidates])
-                print(f'\nactive set contracted to {self.active_candidates.shape[0]} pareto points')
-            # augment active set with old pareto points
-            if self.active_candidates.shape[0] < batch_size:
-                num_samples = min(batch_size, pareto_cand_history.shape[0])
-                num_backtrack = min(num_samples, batch_size - self.active_candidates.shape[0])
-                _, weights, _ = weighted_resampling(pareto_target_history, k=self.resampling_weight)
-                hist_idxs = np.random.choice(
-                    np.arange(pareto_cand_history.shape[0]), num_samples, p=weights, replace=False
-                )
-                is_active = np.in1d(pareto_seq_history[hist_idxs], self.active_seqs)
-                hist_idxs = hist_idxs[~is_active]
-                if hist_idxs.size > 0:
-                    hist_idxs = hist_idxs[:num_backtrack]
-                    backtrack_candidates = pareto_cand_history[hist_idxs]
-                    backtrack_targets = pareto_target_history[hist_idxs]
-                    backtrack_seqs = pareto_seq_history[hist_idxs]
-                    self.active_candidates = np.concatenate((self.active_candidates, backtrack_candidates))
-                    self.active_targets = np.concatenate((self.active_targets, backtrack_targets))
-                    self.active_seqs = np.concatenate((self.active_seqs, backtrack_seqs))
-                    print(f'active set augmented with {backtrack_candidates.shape[0]} backtrack points')
-            # augment active set with random points
-            if self.active_candidates.shape[0] < batch_size:
-                num_samples = min(batch_size, pool_candidates.shape[0])
-                num_rand = min(num_samples, batch_size - self.active_candidates.shape[0])
-                _, weights, _ = weighted_resampling(pool_targets, k=self.resampling_weight)
-                rand_idxs = np.random.choice(
-                    np.arange(pool_candidates.shape[0]), num_samples, p=weights, replace=False
-                )
-                is_active = np.in1d(pool_seqs[rand_idxs], self.active_seqs)
-                rand_idxs = rand_idxs[~is_active][:num_rand]
-                rand_candidates = pool_candidates[rand_idxs]
-                rand_targets = pool_targets[rand_idxs]
-                rand_seqs = pool_seqs[rand_idxs]
-                self.active_candidates = np.concatenate((self.active_candidates, rand_candidates))
-                self.active_targets = np.concatenate((self.active_targets, rand_targets))
-                self.active_seqs = np.concatenate((self.active_seqs, rand_seqs))
-                print(f'active set augmented with {rand_candidates.shape[0]} random points')
+            ba_seq = []
+            ba_cand = []
+            ba_target = []
+
+            if len(pareto_seqs)<=16:
+            
+                for i in range(batch_size):
+                    total_len = len(pareto_seqs)
+                    random_idx = np.random.randint(0,total_len-1)
+                    ba_seq.append(pareto_seqs[random_idx])
+                    ba_cand.append(pareto_candidates[random_idx])
+                    ba_target.append(pareto_targets[random_idx])
+
+
+
+            else:
+                k_means = KMeans(init="k-means++", n_clusters=16)
+                k_means.fit(norm_pareto_targets)
+                k_means_cluster_centers = k_means.cluster_centers_
+                k_means_labels = pairwise_distances_argmin(norm_pareto_targets, k_means_cluster_centers)
+                for i in range(16):
+                    seq_group = pareto_seqs[k_means_labels == i]
+                    candidate_group = pareto_candidates[k_means_labels == i]
+                    target_group = pareto_targets[k_means_labels == i]
+
+                    random_seq_idx= np.random.randint(0,len(seq_group))
+                    ba_seq.append(seq_group[random_seq_idx])
+                    ba_cand.append(candidate_group[random_seq_idx])
+                    ba_target.append(target_group[random_seq_idx])
+
+
+
+            self.active_candidates = np.array(ba_cand)
+            self.active_targets = np.array(ba_target)
+            self.active_seqs  = np.array(ba_seq)
 
             print(rescaled_ref_point)
             print(self.active_targets)
