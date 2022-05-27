@@ -214,6 +214,29 @@ class LaMBO(object):
                 ref_point=torch.tensor(transformed_ref_point).to(self.surrogate_model.device),
                 obj_dim=self.bb_task.obj_dim,
             )
+	    #=======================EDIT================================
+            print('\n ---- Collect all features to file ----')
+            fea_name="feature16D_"+str(round_idx)+".pt"
+            tar_name="target_"+str(round_idx)+".pt"
+            seq_name="seq_"+str(round_idx)
+
+            if self.encoder_obj=='mlm':
+                all_seq_tok_idxs = str_to_tokens(all_seqs, self.encoder.tokenizer) #pass sequence to get number according to ind$
+                with torch.no_grad():
+                     all_tok_idxs = all_seq_tok_idxs.clone().to(self.surrogate_model.device)
+                     all_tok_features, all_mask = self.encoder.get_token_features(all_tok_idxs)
+
+                all_current_features = all_tok_features.clone()
+                all_lat_tok_features, all_pooled_features = self.encoder.pool_features(all_current_features, all_mask)
+                torch.save(all_pooled_features, fea_name)
+                torch.save(all_targets, tar_name)
+
+                textfile=open(seq_name,"w")
+                for element in all_seqs :
+                    textfile.write(element+"\n")
+                textfile.close()
+            #===========================================================
+
 
             print('\n---- optimizing candidates ----')
             if self.resampling_weight is None:
